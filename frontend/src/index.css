@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink: #0e1726;
+  --paper: #eef1f5;
+  --line: #d8dfe7;
+  --rules: #16794f;
+  --ml: #5b4bd6;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-paper text-ink font-sans antialiased;
+  font-feature-settings: 'tnum' 1, 'cv05' 1;
+}
+
+/* All numerics are tabular — column alignment matters more than prettiness here */
+.num {
+  @apply font-mono;
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  @apply font-display text-[11px] font-semibold uppercase tracking-[0.14em] text-slate1;
+}
+
+.card {
+  @apply bg-surface border border-line rounded-card shadow-card;
+}
+
+.focusable:focus-visible {
+  outline: 2px solid var(--ml);
+  outline-offset: 2px;
+}
+
+/* The ledger rule: hairline separators, never boxes inside boxes */
+.ledger-row {
+  @apply border-b border-line last:border-0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+.tick-in {
+  animation: tickIn 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes tickIn {
+  from {
+    transform: translateX(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}

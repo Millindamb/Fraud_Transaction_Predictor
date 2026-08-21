@@ -1,0 +1,54 @@
+# ── Dependencies ─────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ── Python ───────────────────────────────────
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# ── Secrets — never commit these ─────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ── Build output ─────────────────────────────
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# ── ML artefacts and data ────────────────────
+# Model binaries are large and regenerable via training/train_csv.py
+ml-service/models/*.joblib
+ml-service/models/*.json
+ml-service/data/**/*.csv
+ml-service/data/**/*.parquet
+
+# ── Logs ─────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Editor and OS ────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Misc ─────────────────────────────────────
+coverage/
+.cache/
+*.tmp
