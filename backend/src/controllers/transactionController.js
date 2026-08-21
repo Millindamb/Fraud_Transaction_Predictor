@@ -17,6 +17,8 @@ export const scoreSchema = z.object({
   homeCity: z.string().optional(),
   entryMode: z.enum(['CHIP', 'SWIPE', 'CONTACTLESS', 'MANUAL']).optional(),
   cardId: z.string().optional(),
+  velocityLast24h: z.number().int().min(0).max(50).optional(),
+  cardholderAge: z.number().int().min(18).max(120).optional(),
   persist: z.boolean().optional(),
 });
 
@@ -59,6 +61,7 @@ export const score = asyncHandler(async (req, res) => {
     flags: result.flags,
     model: result.model,
     explanation: result.explanation,
+    adapter: result.adapter,
     latencyMs: result.latencyMs,
   };
 

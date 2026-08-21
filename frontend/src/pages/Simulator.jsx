@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { scoreTransaction } from '../api/transactions';
 import PageHeader from '../components/layout/PageHeader';
@@ -7,8 +8,8 @@ import RiskStrip from '../components/risk/RiskStrip';
 import ScoreFusion from '../components/risk/ScoreFusion';
 import RuleFlags from '../components/risk/RuleFlags';
 import ShapTape from '../components/risk/ShapTape';
-import StatusPill from '../components/ui/StatusPill';
-import { bandFor } from '../lib/risk';
+import VerdictBanner from '../components/risk/VerdictBanner';
+import EscalationTrail from '../components/risk/EscalationTrail';
 
 const PRESET = {
   amount: 82000,
@@ -17,12 +18,95 @@ const PRESET = {
   city: 'Delhi',
   homeCity: 'Pune',
   entryMode: 'CHIP',
+  velocityLast24h: 2,
+  cardholderAge: 41,
   cardId: 'CARD-4471',
 };
 
+// One card's day, told in order. Each step carries every signal before it, so
+// the sequence is cumulative rather than six unrelated tests. The times are the
+// story: a routine morning purchase and a 3am keyed-in charge abroad are the
+// same card, and the risk between them is what the system exists to notice.
+const LADDER = [
+  {
+    time: '09:14',
+    label: 'Groceries near home',
+    note: '₹4,500, chip read, Pune. The kind of purchase this card makes every week.',
+    // cardId is cleared deliberately. With a card set, the location rule measures
+    // distance from that card's last stored transaction rather than the home city,
+    // so results would depend on whatever was persisted earlier.
+    patch: { amount: 4500, hour: 14, merchantCategory: 'GROCERY', city: 'Pune', homeCity: 'Pune', entryMode: 'CHIP', velocityLast24h: 1, cardId: '' },
+  },
+  {
+    time: '14:02',
+    label: 'Same card, different city',
+    note: 'Now in Delhi. People travel — on its own this means very little.',
+    patch: { city: 'Delhi' },
+  },
+  {
+    time: '14:05',
+    label: 'Card number keyed in by hand',
+    note: 'The chip was not read. A cloned card cannot fake a chip; a written-down number needs no card at all.',
+    patch: { entryMode: 'MANUAL' },
+  },
+  {
+    time: '03:11',
+    label: 'And again, at three in the morning',
+    note: 'This is the hour fraud lives in. Legitimate traffic averages 11am; fraud averages 3:48am.',
+    patch: { hour: 3 },
+  },
+  {
+    time: '03:12',
+    label: 'Now the terminal is abroad',
+    note: 'Dubai, one minute later. No one crosses that distance in a minute.',
+    patch: { city: 'Dubai' },
+  },
+  {
+    time: '03:20',
+    label: 'Ninth attempt today',
+    note: 'Someone is working through a card, not shopping with it.',
+    patch: { velocityLast24h: 9 },
+  },
+];
+
+// A second, separate pair. Both are otherwise clean transactions, differing only
+// in how many times the card was used today. The model barely reacts — it learned
+// from data where velocity separates the classes weakly. The rule engine fires
+// anyway, because a bank has policy reasons to look at a card used twelve times
+// in a day whether or not the model finds it predictive.
+const VELOCITY_PAIR = [
+  { label: 'Normal use', patch: { amount: 4500, hour: 14, merchantCategory: 'GROCERY', city: 'Pune', homeCity: 'Pune', entryMode: 'CHIP', velocityLast24h: 2, cardId: '' } },
+  { label: 'Velocity burst', patch: { amount: 4500, hour: 14, merchantCategory: 'GROCERY', city: 'Pune', homeCity: 'Pune', entryMode: 'CHIP', velocityLast24h: 12, cardId: '' } },
+];
+
 export default function Simulator() {
   const [form, setForm] = useState(PRESET);
+  const [persist, setPersist] = useState(false);
+  // Which signals from the walkthrough are switched on. Step 0 is the baseline
+  // purchase and is always applied, so it is never in this set.
+  const [selected, setSelected] = useState(new Set());
   const score = useMutation({ mutationFn: scoreTransaction });
+
+  // Baseline plus whichever signals are switched on, applied in story order so a
+  // later step always overrides an earlier one on the same field.
+  const composeFrom = (set) =>
+    LADDER.reduce(
+      (acc, step, i) => (i === 0 || set.has(i) ? { ...acc, ...step.patch } : acc),
+      { ...PRESET }
+    );
+
+  const applySelection = (set) => {
+    setSelected(set);
+    const next = composeFrom(set);
+    setForm(next);
+    score.mutate({ ...next, persist });
+  };
+
+  const toggleSignal = (i) => {
+    const next = new Set(selected);
+    next.has(i) ? next.delete(i) : next.add(i);
+    applySelection(next);
+  };
   const set = (k) => (e) =>
     setForm((f) => ({ ...f, [k]: e.target.type === 'number' ? Number(e.target.value) : e.target.value }));
 
@@ -36,7 +120,7 @@ export default function Simulator() {
         description="Send a synthetic authorisation through the live pipeline to see how the rules and model react. Nothing is written to the ledger."
       />
 
-      <div className="grid gap-4 lg:grid-cols-[20rem_1fr]">
+      <div className="grid gap-4 lg:grid-cols-[17rem_minmax(0,1fr)] xl:grid-cols-[17rem_minmax(0,1fr)_17rem]">
         <Card title="Transaction input">
           <div className="space-y-3.5">
             <Field label="Amount (₹)">
@@ -58,19 +142,54 @@ export default function Simulator() {
             <Field label="Cardholder home city">
               <Input value={form.homeCity} onChange={set('homeCity')} />
             </Field>
-            <Field label="Entry mode">
+            <Field label="Entry mode" hint="Determines the device trust score the model sees">
               <Select value={form.entryMode} onChange={set('entryMode')}>
                 {['CHIP', 'SWIPE', 'CONTACTLESS', 'MANUAL'].map((c) => (
                   <option key={c}>{c}</option>
                 ))}
               </Select>
             </Field>
+            <Field label="Transactions in last 24h" hint="The model's third-strongest signal">
+              <Input
+                type="number"
+                min="0"
+                max="50"
+                value={form.velocityLast24h}
+                onChange={set('velocityLast24h')}
+              />
+            </Field>
+            <Field label="Cardholder age">
+              <Input
+                type="number"
+                min="18"
+                max="120"
+                value={form.cardholderAge}
+                onChange={set('cardholderAge')}
+              />
+            </Field>
+
+
+            <label className="flex items-start gap-2 border-t border-line pt-3">
+              <input
+                type="checkbox"
+                className="focusable mt-0.5 h-4 w-4 accent-[#5B4BD6]"
+                checked={persist}
+                onChange={(e) => setPersist(e.target.checked)}
+              />
+              <span className="text-xs text-slate1">
+                Write to the ledger
+                <span className="mt-0.5 block">
+                  Off by default so testing does not distort the ledger or the alert queue. Turn it
+                  on to follow this transaction through the full pipeline.
+                </span>
+              </span>
+            </label>
 
             <div className="flex gap-2 pt-1">
-              <Button className="flex-1" busy={score.isPending} onClick={() => score.mutate(form)}>
+              <Button className="flex-1" busy={score.isPending} onClick={() => score.mutate({ ...form, persist })}>
                 Run scoring
               </Button>
-              <Button variant="ghost" onClick={() => { setForm(PRESET); score.reset(); }}>
+              <Button variant="ghost" onClick={() => { setForm(PRESET); score.reset(); setSelected(new Set()); }}>
                 Reset
               </Button>
             </div>
@@ -82,29 +201,47 @@ export default function Simulator() {
 
           {!result ? (
             <Card>
-              <div className="px-2 py-16 text-center">
-                <p className="font-display text-sm font-semibold">No result yet</p>
-                <p className="mt-1 text-sm text-slate1">
-                  Adjust the fields and run scoring to see the strip, the rules that fired, and the
-                  model's reasoning.
+              <div className="px-6 py-20 text-center">
+                <p className="font-display text-base font-semibold">Nothing scored yet</p>
+                <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-slate1">
+                  Run the demo ladder to watch a routine purchase turn into fraud one signal at a
+                  time, or set the fields yourself and run scoring.
                 </p>
               </div>
             </Card>
           ) : (
             <>
-              <Card
-                title="Result"
-                right={
-                  <div className="flex items-center gap-2">
-                    <StatusPill score={result.finalScore} />
-                    <span
-                      className="font-display text-sm font-semibold"
-                      style={{ color: bandFor(result.finalScore).color }}
+              {result.transactionId && result._id && (
+                <div className="card flex flex-wrap items-center justify-between gap-3 p-3.5">
+                  <p className="text-sm">
+                    Written to the ledger as{' '}
+                    <span className="num font-medium">{result.transactionId}</span>
+                    {['ALERT', 'BLOCK'].includes(result.decision) && ' — an alert was raised'}
+                  </p>
+                  <div className="flex gap-2">
+                    <Link
+                      to={`/transactions/${result.transactionId}`}
+                      className="focusable rounded-md border border-line px-2.5 py-1.5 text-xs hover:bg-paper"
                     >
-                      {bandFor(result.finalScore).action}
-                    </span>
+                      Open in ledger
+                    </Link>
+                    {['ALERT', 'BLOCK'].includes(result.decision) && (
+                      <Link
+                        to="/alerts"
+                        className="focusable rounded-md border border-line px-2.5 py-1.5 text-xs hover:bg-paper"
+                      >
+                        View alert queue
+                      </Link>
+                    )}
                   </div>
-                }
+                </div>
+              )}
+
+              <VerdictBanner result={result} />
+
+              <Card
+                title="How the score was reached"
+                subtitle="Where each engine landed, and where the fused score sits"
               >
                 <RiskStrip
                   ruleScore={result.ruleScore}
@@ -118,21 +255,94 @@ export default function Simulator() {
                     finalScore={result.finalScore}
                     weights={result.fusion?.weights || { rule: 0.4, ml: 0.6 }}
                     strategy={result.fusion?.strategy}
+                    blended={result.fusion?.blended}
+                    floors={result.fusion?.floors}
                   />
                 </div>
               </Card>
 
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 lg:grid-cols-2">
                 <Card title="Rules that fired">
                   <RuleFlags flags={result.flags} />
                 </Card>
                 <Card title="Model explanation">
                   <ShapTape contributions={result.explanation?.contributions} />
+                  {result.model?.name && (
+                    <p className="mt-3 border-t border-line pt-2.5 text-[11px] text-slate1">
+                      {result.model.name}
+                      {result.model.source === 'fallback' || result.model.source === 'fallback-degraded'
+                        ? ' — fallback scorer, the trained model was unreachable'
+                        : ' — trained model'}
+                    </p>
+                  )}
                 </Card>
               </div>
             </>
           )}
         </div>
+        {/* Right rail: the scripted walkthroughs. Kept out of the input card so
+            the form stays a form and the narrative reads as its own thing. */}
+        <aside className="space-y-4 xl:sticky xl:top-6 xl:self-start">
+          <Card bodyClass="p-4">
+            <p className="eyebrow">One card, one day</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate1">
+              Six moments on the same card. Switch any of them on or off and watch where the risk
+              turns.
+            </p>
+
+            <div className="mt-2.5 flex gap-1.5">
+              <button
+                onClick={() => applySelection(new Set(LADDER.map((_, i) => i).slice(1)))}
+                disabled={score.isPending}
+                className="focusable flex-1 rounded-md border border-line px-2 py-1.5 text-[11px] hover:bg-paper disabled:opacity-50"
+              >
+                Select all
+              </button>
+              <button
+                onClick={() => applySelection(new Set())}
+                disabled={score.isPending}
+                className="focusable flex-1 rounded-md border border-line px-2 py-1.5 text-[11px] hover:bg-paper disabled:opacity-50"
+              >
+                Clear all
+              </button>
+            </div>
+
+            <div className="mt-3">
+              <EscalationTrail
+                steps={LADDER}
+                selected={selected}
+                score={result?.finalScore}
+                onToggle={toggleSignal}
+                disabled={score.isPending}
+              />
+            </div>
+          </Card>
+
+          <Card bodyClass="p-4">
+            <p className="eyebrow">Where the engines disagree</p>
+            <p className="mt-1 text-xs text-slate1">
+              Same transaction, different card usage today. Watch the rule score move while the
+              model stays put.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {VELOCITY_PAIR.map((step) => (
+                <button
+                  key={step.label}
+                  onClick={() => {
+                    const next = { ...PRESET, ...step.patch };
+                    setForm(next);
+                    setActiveStep(null);
+                    score.mutate({ ...next, persist });
+                  }}
+                  className="focusable rounded-md border border-line px-2 py-1 text-[11px] hover:bg-paper"
+                >
+                  {step.label}
+                </button>
+              ))}
+            </div>
+          </Card>
+        </aside>
+
       </div>
     </>
   );

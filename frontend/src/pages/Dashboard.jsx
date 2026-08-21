@@ -11,11 +11,14 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { getStats } from '../api/transactions';
+import { getStats, listTransactions } from '../api/transactions';
 import { useLiveFeed } from '../hooks/useLiveFeed';
 import PageHeader from '../components/layout/PageHeader';
 import { Card, ErrorNote, Skeleton, Button, EmptyState } from '../components/ui/Primitives';
 import StatusPill from '../components/ui/StatusPill';
+import ImpactStrip from '../components/risk/ImpactStrip';
+import EngineDivergence from '../components/charts/EngineDivergence';
+import BandDistribution from '../components/charts/BandDistribution';
 import { bandFor } from '../lib/risk';
 import { clock, compactInr, inr } from '../lib/format';
 
@@ -28,13 +31,23 @@ export default function Dashboard() {
     refetchInterval: 60_000,
   });
 
+  // A sample of the ledger, for the charts that need per-transaction points
+  const sample = useQuery({
+    queryKey: ['transactions', 'sample'],
+    queryFn: () => listTransactions({ page: 1, limit: 100 }),
+    refetchInterval: 60_000,
+  });
+  const rows = sample.data?.items || [];
+
   return (
     <>
       <PageHeader
         eyebrow="Last 24 hours"
         title="Risk overview"
-        description="Every authorisation that passed through the scoring pipeline today."
+        description="Every authorisation that passed through the scoring pipeline today, and what it cost the people on either side of it."
       />
+
+      <ImpactStrip stats={stats.data} />
 
       {stats.isLoading ? (
         <Skeleton rows={2} />
@@ -42,15 +55,43 @@ export default function Dashboard() {
         <Card><ErrorNote error={stats.error} onRetry={stats.refetch} /></Card>
       ) : (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <Stat label="Transactions scored" value={stats.data.total?.toLocaleString('en-IN')} />
-          <Stat label="Alerts raised" value={stats.data.alerts?.toLocaleString('en-IN')} tone="#D2601A" />
-          <Stat label="Blocked value" value={compactInr(stats.data.blockedValue)} tone="#B4231B" />
+          <Stat
+            label="Transactions scored"
+            value={stats.data.total?.toLocaleString('en-IN')}
+            note="Every authorisation through the pipeline"
+          />
+          <Stat
+            label="Alerts raised"
+            value={stats.data.alerts?.toLocaleString('en-IN')}
+            tone="#D2601A"
+            note="Waiting on a human decision"
+          />
+          <Stat
+            label="Value blocked"
+            value={compactInr(stats.data.blockedValue)}
+            tone="#B4231B"
+            note="Declined before it settled"
+          />
           <Stat
             label="Alert rate"
             value={`${((stats.data.alerts / Math.max(stats.data.total, 1)) * 100).toFixed(2)}%`}
+            note="The share of traffic needing review"
           />
         </div>
       )}
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[1.35fr_1fr]">
+        <Card
+          title="Where the two engines disagree"
+          subtitle="Each point is a transaction, placed by what each engine thought of it"
+        >
+          <EngineDivergence transactions={rows} />
+        </Card>
+
+        <Card title="Decision split" subtitle="How today's traffic resolved">
+          <BandDistribution transactions={rows} />
+        </Card>
+      </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[1.35fr_1fr]">
         <Card title="Score distribution over time" subtitle="Hourly mean risk score and alert count">
@@ -120,13 +161,17 @@ export default function Dashboard() {
   );
 }
 
-function Stat({ label, value, tone }) {
+function Stat({ label, value, tone, note }) {
   return (
     <div className="card p-4">
       <p className="eyebrow">{label}</p>
-      <p className="num mt-2 text-2xl font-semibold" style={tone ? { color: tone } : undefined}>
+      <p
+        className="num mt-2 text-3xl font-semibold leading-none tracking-tight"
+        style={tone ? { color: tone } : undefined}
+      >
         {value ?? '—'}
       </p>
+      {note && <p className="mt-2 text-[11px] leading-relaxed text-slate1">{note}</p>}
     </div>
   );
 }
