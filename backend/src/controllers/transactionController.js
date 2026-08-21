@@ -19,6 +19,9 @@ export const scoreSchema = z.object({
   cardId: z.string().optional(),
   velocityLast24h: z.number().int().min(0).max(50).optional(),
   cardholderAge: z.number().int().min(18).max(120).optional(),
+  blacklistHit: z.boolean().optional(),
+  biometric: z.enum(['approved', 'declined', 'not_sent']).optional(),
+  deviceKnown: z.boolean().optional(),
   persist: z.boolean().optional(),
 });
 
@@ -63,6 +66,8 @@ export const score = asyncHandler(async (req, res) => {
     explanation: result.explanation,
     adapter: result.adapter,
     latencyMs: result.latencyMs,
+    preVerificationScore: result.preVerificationScore,
+    verification: result.verification,
   };
 
   if (!input.persist) return res.json(doc);
@@ -161,6 +166,71 @@ export const stats = asyncHandler(async (req, res) => {
     avgScore: Math.round(totals?.avgScore || 0),
     series: series.map((s) => ({ ...s, hour: s.hour.padStart(2, '0') })),
   });
+});
+
+/**
+ * GET /api/transactions/heatmap
+ *
+ * Mean risk score per hour per merchant category. Aggregated in Mongo rather
+ * than in the browser: a 24 x 6 grid computed from a 100-row page would leave
+ * most cells empty, and an empty cell reads as "no risk" when it actually means
+ * "no data" — the two must not look alike.
+ */
+export const heatmap = asyncHandler(async (req, res) => {
+  const days = Number(req.query.days) || 14;
+  const since = new Date(Date.now() - days * 86400_000);
+
+  const cells = await Transaction.aggregate([
+    { $match: { timestamp: { $gte: since } } },
+    {
+      $group: {
+        _id: { hour: { $hour: '$timestamp' }, category: '$merchant.category' },
+        avgScore: { $avg: '$finalScore' },
+        maxScore: { $max: '$finalScore' },
+        count: { $sum: 1 },
+        flagged: { $sum: { $cond: [{ $in: ['$decision', ['ALERT', 'BLOCK']] }, 1, 0] } },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        hour: '$_id.hour',
+        category: '$_id.category',
+        avgScore: { $round: ['$avgScore', 0] },
+        maxScore: 1,
+        count: 1,
+        flagged: 1,
+      },
+    },
+  ]);
+
+  // Hour totals, so the panel can state the pattern rather than leaving the
+  // reader to infer it from colour alone
+  const byHour = await Transaction.aggregate([
+    { $match: { timestamp: { $gte: since } } },
+    {
+      $group: {
+        _id: { $hour: '$timestamp' },
+        avgScore: { $avg: '$finalScore' },
+        count: { $sum: 1 },
+        flagged: { $sum: { $cond: [{ $in: ['$decision', ['ALERT', 'BLOCK']] }, 1, 0] } },
+      },
+    },
+    { $sort: { _id: 1 } },
+    {
+      $project: {
+        _id: 0,
+        hour: '$_id',
+        avgScore: { $round: ['$avgScore', 0] },
+        count: 1,
+        flagged: 1,
+      },
+    },
+  ]);
+
+  const categories = [...new Set(cells.map((c) => c.category).filter(Boolean))].sort();
+
+  res.json({ cells, byHour, categories, days });
 });
 
 /** GET /api/transactions/:id — accepts the business ID, not the Mongo _id */

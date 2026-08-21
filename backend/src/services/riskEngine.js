@@ -2,6 +2,7 @@ import env from '../config/env.js';
 import { buildFeatures } from './featureBuilder.js';
 import { evaluateRules } from './ruleEngine.js';
 import { predict } from './mlClient.js';
+import { applyVerification, hasChecks } from './verification.js';
 
 export function bandFor(score) {
   if (score <= env.BAND_LOW_MAX) return { band: 'LOW', decision: 'APPROVE' };
@@ -59,12 +60,31 @@ export async function scoreTransaction(raw) {
   ]);
 
   const fusion = fuse(ruleScore, ml.mlScore, { flagCount: flags.length });
-  const { band, decision } = bandFor(fusion.finalScore);
+
+  // Verification runs after the score, never before it. The score says how
+  // unusual the transaction is; verification says whether it was really the
+  // cardholder. Keeping them separate is what lets an anomalous-but-genuine
+  // purchase clear without pretending it was never anomalous.
+  const checks = {
+    blacklistHit: raw.blacklistHit,
+    biometric: raw.biometric,
+    deviceKnown: raw.deviceKnown,
+  };
+  const verification = hasChecks(checks)
+    ? applyVerification(fusion.finalScore, checks)
+    : null;
+
+  const finalScore = verification ? verification.score : fusion.finalScore;
+  const { band, decision } = bandFor(finalScore);
 
   return {
     ruleScore,
     mlScore: ml.mlScore,
-    finalScore: fusion.finalScore,
+    finalScore,
+    preVerificationScore: verification ? fusion.finalScore : undefined,
+    verification: verification
+      ? { applied: verification.applied, overridden: verification.overridden }
+      : undefined,
     fusion: {
       strategy: fusion.strategy,
       weights: fusion.weights,

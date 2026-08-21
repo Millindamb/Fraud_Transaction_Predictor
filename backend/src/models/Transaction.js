@@ -38,6 +38,14 @@ const transactionSchema = new mongoose.Schema(
     flags: [flagSchema],
     model: { name: String, version: String, confidence: Number, source: String },
     explanation: { baseValue: Number, contributions: [contributionSchema] },
+    // How the model's inputs were obtained — direct, mapped or derived
+    adapter: { type: mongoose.Schema.Types.Mixed, default: null },
+
+    preVerificationScore: Number,
+    verification: {
+      applied: [{ code: String, label: String, detail: String, kind: String, _id: false }],
+      overridden: Boolean,
+    },
 
     latencyMs: Number,
   },

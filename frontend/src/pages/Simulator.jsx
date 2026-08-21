@@ -10,6 +10,7 @@ import RuleFlags from '../components/risk/RuleFlags';
 import ShapTape from '../components/risk/ShapTape';
 import VerdictBanner from '../components/risk/VerdictBanner';
 import EscalationTrail from '../components/risk/EscalationTrail';
+import VerificationPanel from '../components/risk/VerificationPanel';
 
 const PRESET = {
   amount: 82000,
@@ -69,6 +70,37 @@ const LADDER = [
   },
 ];
 
+// A second story, and the more interesting one. The first shows a system
+// catching fraud; this shows it *not* catching a customer. A ₹1,20,000 laptop on
+// a card that normally spends ₹3,000 is genuinely anomalous and should score
+// high — the question is what happens next.
+const VERIFY_STORY = [
+  {
+    time: '20:41',
+    label: 'A ₹1,20,000 laptop',
+    note: 'This card usually spends ₹1,000–5,000. Forty times the normal basket, in a category never used.',
+    patch: { amount: 120000, hour: 20, merchantCategory: 'ELECTRONICS', city: 'Pune', homeCity: 'Pune', entryMode: 'CHIP', velocityLast24h: 1, cardId: '', biometric: 'not_sent', deviceKnown: undefined, blacklistHit: false },
+  },
+  {
+    time: '20:41',
+    label: 'Same phone, same home network',
+    note: 'Device fingerprint and IP both match every previous purchase on this card.',
+    patch: { deviceKnown: true },
+  },
+  {
+    time: '20:41',
+    label: 'Approved by fingerprint, in nine seconds',
+    note: 'A push notification asked the cardholder directly. They confirmed with a biometric on their registered phone.',
+    patch: { biometric: 'approved' },
+  },
+  {
+    time: '—',
+    label: 'But the card is on the blocklist',
+    note: 'Reported compromised this morning. Nothing overrides this — not a fingerprint, not a familiar device.',
+    patch: { blacklistHit: true },
+  },
+];
+
 // A second, separate pair. Both are otherwise clean transactions, differing only
 // in how many times the card was used today. The model barely reacts — it learned
 // from data where velocity separates the classes weakly. The rule engine fires
@@ -85,6 +117,10 @@ export default function Simulator() {
   // Which signals from the walkthrough are switched on. Step 0 is the baseline
   // purchase and is always applied, so it is never in this set.
   const [selected, setSelected] = useState(new Set());
+  const [verifySelected, setVerifySelected] = useState(new Set());
+  // Which walkthrough produced the result on screen. Without this both
+  // stories show the same footer score, implying each ran when only one did.
+  const [activeStory, setActiveStory] = useState(null);
   const score = useMutation({ mutationFn: scoreTransaction });
 
   // Baseline plus whichever signals are switched on, applied in story order so a
@@ -97,6 +133,7 @@ export default function Simulator() {
 
   const applySelection = (set) => {
     setSelected(set);
+    setActiveStory('ladder');
     const next = composeFrom(set);
     setForm(next);
     score.mutate({ ...next, persist });
@@ -105,7 +142,26 @@ export default function Simulator() {
   const toggleSignal = (i) => {
     const next = new Set(selected);
     next.has(i) ? next.delete(i) : next.add(i);
+    setVerifySelected(new Set());
     applySelection(next);
+  };
+
+  const applyVerifySelection = (set) => {
+    setVerifySelected(set);
+    setSelected(new Set());
+    setActiveStory('verify');
+    const next = VERIFY_STORY.reduce(
+      (acc, step, i) => (i === 0 || set.has(i) ? { ...acc, ...step.patch } : acc),
+      { ...PRESET }
+    );
+    setForm(next);
+    score.mutate({ ...next, persist });
+  };
+
+  const toggleVerify = (i) => {
+    const next = new Set(verifySelected);
+    next.has(i) ? next.delete(i) : next.add(i);
+    applyVerifySelection(next);
   };
   const set = (k) => (e) =>
     setForm((f) => ({ ...f, [k]: e.target.type === 'number' ? Number(e.target.value) : e.target.value }));
@@ -186,10 +242,10 @@ export default function Simulator() {
             </label>
 
             <div className="flex gap-2 pt-1">
-              <Button className="flex-1" busy={score.isPending} onClick={() => score.mutate({ ...form, persist })}>
+              <Button className="flex-1" busy={score.isPending} onClick={() => { setActiveStory(null); score.mutate({ ...form, persist }); }}>
                 Run scoring
               </Button>
-              <Button variant="ghost" onClick={() => { setForm(PRESET); score.reset(); setSelected(new Set()); }}>
+              <Button variant="ghost" onClick={() => { setForm(PRESET); score.reset(); setSelected(new Set()); setVerifySelected(new Set()); setActiveStory(null); }}>
                 Reset
               </Button>
             </div>
@@ -239,6 +295,15 @@ export default function Simulator() {
 
               <VerdictBanner result={result} />
 
+              {result.verification?.applied?.length > 0 && (
+                <VerificationPanel
+                  before={result.preVerificationScore ?? result.finalScore}
+                  after={result.finalScore}
+                  applied={result.verification.applied}
+                  overridden={result.verification.overridden}
+                />
+              )}
+
               <Card
                 title="How the score was reached"
                 subtitle="Where each engine landed, and where the fused score sits"
@@ -282,7 +347,7 @@ export default function Simulator() {
         </div>
         {/* Right rail: the scripted walkthroughs. Kept out of the input card so
             the form stays a form and the narrative reads as its own thing. */}
-        <aside className="space-y-4 xl:sticky xl:top-6 xl:self-start">
+        <aside className="space-y-4 xl:sticky xl:top-6 xl:max-h-[calc(100vh-3rem)] xl:self-start xl:overflow-y-auto xl:pr-1 xl:[scrollbar-width:thin]">
           <Card bodyClass="p-4">
             <p className="eyebrow">One card, one day</p>
             <p className="mt-1 text-xs leading-relaxed text-slate1">
@@ -311,8 +376,25 @@ export default function Simulator() {
               <EscalationTrail
                 steps={LADDER}
                 selected={selected}
-                score={result?.finalScore}
+                score={activeStory === 'ladder' ? result?.finalScore : null}
                 onToggle={toggleSignal}
+                disabled={score.isPending}
+              />
+            </div>
+          </Card>
+
+          <Card bodyClass="p-4">
+            <p className="eyebrow">When the customer is real</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate1">
+              An unusual purchase that is not fraud. Watch what clears it, and what refuses to be
+              cleared.
+            </p>
+            <div className="mt-3">
+              <EscalationTrail
+                steps={VERIFY_STORY}
+                selected={verifySelected}
+                score={activeStory === 'verify' ? result?.finalScore : null}
+                onToggle={toggleVerify}
                 disabled={score.isPending}
               />
             </div>
