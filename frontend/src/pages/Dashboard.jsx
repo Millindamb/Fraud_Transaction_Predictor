@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Download, ShieldCheck } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -10,14 +12,17 @@ import {
 } from 'recharts';
 import { getStats, listTransactions } from '../api/transactions';
 import PageHeader from '../components/layout/PageHeader';
-import { Card, ErrorNote, Skeleton } from '../components/ui/Primitives';
+import { Card, ErrorNote, Skeleton, Button } from '../components/ui/Primitives';
 import ImpactStrip from '../components/risk/ImpactStrip';
 import EngineDivergence from '../components/charts/EngineDivergence';
 import BandDistribution from '../components/charts/BandDistribution';
+import ExportReportModal from '../components/reports/ExportReportModal';
 import { RULE_CATALOG, bandFor } from '../lib/risk';
 import { compactInr } from '../lib/format';
 
 export default function Dashboard() {
+  const [exportOpen, setExportOpen] = useState(false);
+
   const stats = useQuery({
     queryKey: ['stats', '24h'],
     queryFn: () => getStats('24h'),
@@ -34,11 +39,19 @@ export default function Dashboard() {
 
   return (
     <>
-      <PageHeader
-        eyebrow="Last 24 hours"
-        title="Risk overview"
-        description="Every authorisation that passed through the scoring pipeline today, and what it cost the people on either side of it."
-      />
+      <div className="flex items-start justify-between gap-4">
+        <PageHeader
+          eyebrow="Last 24 hours"
+          title="Risk overview"
+          description="Every authorisation that passed through the scoring pipeline today, and what it cost the people on either side of it."
+        />
+        <Button variant="ghost" onClick={() => setExportOpen(true)} className="shrink-0">
+          <Download size={14} />
+          Download Report
+        </Button>
+      </div>
+
+      {exportOpen && <ExportReportModal onClose={() => setExportOpen(false)} />}
 
       <ImpactStrip stats={stats.data} />
 
@@ -74,6 +87,8 @@ export default function Dashboard() {
           />
         </div>
       )}
+
+      <FraudImpact transactions={rows} />
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[1.35fr_1fr]">
         <Card
@@ -156,6 +171,40 @@ function Stat({ label, value, tone, note }) {
         {value ?? '—'}
       </p>
       {note && <p className="mt-2 text-[11px] leading-relaxed text-slate1">{note}</p>}
+    </div>
+  );
+}
+
+/**
+ * "Frauds stopped" — the one number on the dashboard meant to land
+ * emotionally rather than analytically. Everything else here is a rate or a
+ * mean; this is the count of transactions the pipeline was confident enough
+ * to block outright, and what that spared someone.
+ */
+function FraudImpact({ transactions = [] }) {
+  const blocked = transactions.filter((t) => t.decision === 'BLOCK');
+  const count = blocked.length;
+  const saved = blocked.reduce((s, t) => s + (t.amount || 0), 0);
+
+  if (!count) return null;
+
+  return (
+    <div className="mt-4 flex items-center gap-5 rounded-xl border border-band-critical/25 bg-[#FDF1EF] px-7 py-6">
+      <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-band-critical/15 text-band-critical">
+        <ShieldCheck size={32} />
+      </span>
+      <div>
+        <p className="font-display text-xl font-semibold leading-snug text-ink sm:text-2xl">
+          <span className="num text-band-critical">{count}</span>{' '}
+          {count === 1 ? 'fraud attempt was' : 'fraud attempts were'} stopped before reaching a
+          real cardholder.
+        </p>
+        <p className="mt-1.5 text-sm text-slate1">
+          <span className="num font-medium text-ink">{compactInr(saved)}</span> kept out of a
+          stranger's hands today — not a false alarm, a transaction the pipeline was confident
+          enough to block outright.
+        </p>
+      </div>
     </div>
   );
 }

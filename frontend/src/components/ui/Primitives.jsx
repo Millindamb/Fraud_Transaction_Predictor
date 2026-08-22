@@ -1,4 +1,40 @@
-import { Loader2 } from 'lucide-react';
+import { Loader2, X } from 'lucide-react';
+
+// add anywhere in the file:
+export function Modal({ title, icon, onClose, children, className = '' }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4 backdrop-blur-[2px]"
+      onClick={onClose}
+    >
+      <div
+        className={`card w-full max-w-md overflow-hidden ${className}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {title && (
+          <header className="flex items-center justify-between gap-3 border-b border-line px-5 py-4">
+            <div className="flex items-center gap-3">
+              {icon && (
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-paper text-ink">
+                  {icon}
+                </span>
+              )}
+              <h2 className="font-display text-base font-semibold tracking-tight">{title}</h2>
+            </div>
+            <button
+              onClick={onClose}
+              className="focusable rounded-md p-1 text-slate1 hover:bg-paper hover:text-ink"
+              aria-label="Close"
+            >
+              <X size={18} />
+            </button>
+          </header>
+        )}
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
 
 export function Card({ title, subtitle, right, children, className = '', bodyClass = 'p-4' }) {
   return (
