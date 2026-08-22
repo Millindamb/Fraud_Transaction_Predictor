@@ -8,6 +8,38 @@ MERN stack plus a Python inference service. Three apps, one pipeline.
 
 ---
 
+## How this answers the brief
+
+| Requirement | Where it lives |
+| --- | --- |
+| Identify fraud from predefined anomaly rules | Six-rule engine with editable thresholds and severity scaling — `/rules` |
+| Value above a defined threshold | `AMOUNT_ANOMALY`, graduated 1.0×–3.6× by how far past the threshold |
+| Odd days or hours | `TIME_ANOMALY`, with a 1.5× multiplier for 01:00–04:00 |
+| Unusual location | `LOCATION_ANOMALY` — geo-distance, plus implied travel speed |
+| Unusual order or purchase pattern | `PATTERN_ANOMALY` and `VELOCITY` |
+| A lightweight ML layer producing a risk score | GradientBoosting + IsolationForest, served over FastAPI |
+| Explain *why* a transaction was flagged | Rules fired with plain-language detail, plus SHAP contributions — both before the decision gate |
+| Produce a risk score | Fused 0–100 score with visible arithmetic and escalation floors |
+| Generate an alert | Alert queue, with analyst verdicts feeding the next retrain |
+
+Two things go beyond the brief and are worth pointing at: a **verification layer**
+that resolves anomalous-but-genuine transactions instead of declining them, and a
+**divergence chart** showing where the two engines disagree — the evidence that
+the hybrid is not redundant.
+
+### On the dataset
+
+The brief recommends the ULB Credit Card Fraud dataset. We built support for it
+(`ml-service/training/train_ulb.py`, `/ulb/predict`) and then chose a
+business-feature dataset for the live system instead. The reason is the
+explainability requirement: ULB's features are **V1–V28, anonymised PCA
+components**, so SHAP can only report "V17 contributed +0.42" — which is not an
+explanation a fraud analyst or a disputing customer can use. A dataset with real
+attributes lets the same pipeline say "device trust score, +5.43". The ULB path
+remains in the repo for benchmarking.
+
+---
+
 ## The problem
 
 Fraud is roughly 1.5% of card transactions. That imbalance breaks the obvious
@@ -51,6 +83,11 @@ So FraudGuard runs both, and shows its working.
                              │
                    ┌─────────▼─────────┐
                    │  EXPLAINABILITY   │  SHAP contributions
+                   └─────────┬─────────┘
+                             │
+                   ┌─────────▼─────────┐
+                   │   VERIFICATION    │  biometric push, device/IP
+                   │                   │  match, blocklist override
                    └─────────┬─────────┘
                              │
                    ┌─────────▼─────────┐
@@ -153,6 +190,34 @@ A weighted blend will otherwise let a quiet engine average away a confident one 
 the specific failure mode blending introduces. When a floor applies, the UI shows
 the blend arithmetic *and* the reason it was overridden, rather than presenting an
 unexplained number.
+
+### Verification — the layer after the score
+
+A risk score answers *is this unusual?* It cannot answer *is this really the
+cardholder?* Those are different questions, and conflating them is why naive
+systems decline a customer's first large purchase.
+
+So the score stands, and identity evidence adjusts the decision on top of it
+(`backend/src/services/verification.js`):
+
+| Check | Effect |
+| --- | --- |
+| Card or device on the blocklist | **Override → 100, Block** |
+| Cardholder declined the push notification | **Override → 100, Block** |
+| Approved by fingerprint on the registered phone | −45 |
+| Same device fingerprint and IP as usual | −10 |
+| Unrecognised device and network | +15 |
+
+Overrides are not weighted signals. A known-compromised credential is not
+evidence to be argued with by a fingerprint.
+
+The UI shows **both** numbers — the score the pipeline produced and the score the
+customer experienced — with the evidence between them. Hiding the original would
+be dishonest: the transaction *was* anomalous, and an auditor needs to see it was
+noticed and then explained.
+
+This is what makes a ₹1,20,000 laptop on a card that normally spends ₹3,000
+clearable rather than declined.
 
 ### Explainability
 
@@ -481,12 +546,12 @@ trust score*, *Transaction velocity*. The fallback returns *Location distance*,
 
 | Route | Purpose |
 | --- | --- |
-| `/` | 24-hour stats, hourly score chart, live authorisation feed |
+| `/` | Human-impact strip, 24-hour stats, engine-divergence scatter, decision split, rule-frequency panel |
 | `/transactions` | Filterable ledger of every scored transaction |
 | `/transactions/:id` | Full decision record — authorisation strip, fusion maths, rules fired, SHAP tape |
 | `/alerts` | Review queue; each verdict becomes a training label |
 | `/rules` | Threshold and weight editing, weight-budget analysis |
-| `/simulator` | Score a transaction through the live pipeline, optionally persisting it |
+| `/simulator` | Score a transaction through the live pipeline, with two scripted walkthroughs, optionally persisting it |
 
 Every screen shares one pipeline. Editing a weight on `/rules` changes the next
 score on `/simulator`; a persisted simulator run appears in `/transactions` and,
@@ -601,37 +666,48 @@ a valid JWT.
 
 ## Demo
 
-### The ladder — why the model needs combined signals
+### Story one — "One card, one day"
 
-Six buttons in the Simulator, each adding one signal:
+Six moments on the same card, each a toggle in the Simulator's right rail. Switch
+any on or off; the score recomputes.
 
-| Step | Change | Model score |
+| Time | Signal | Model score |
 | --- | --- | --- |
-| 1 | ₹4,500, 2pm, Pune, CHIP | ~9 |
-| 2 | + different city | ~12 |
-| 3 | + manual entry | ~13 |
-| 4 | **+ 3am** | **~83** |
-| 5 | + foreign city | ~89 |
-| 6 | + 9 transactions in 24h | ~90 |
+| 09:14 | Groceries near home *(always on)* | ~9 |
+| 14:02 | + different city | ~12 |
+| 14:05 | + card number keyed in by hand | ~13 |
+| **03:11** | **+ three in the morning** | **~83** |
+| 03:12 | + terminal abroad | ~89 |
+| 03:20 | + ninth attempt today | ~90 |
 
-The jump between 3 and 4 is the point. The model learned that fraud requires
-several signals together — an unusual location on a manual entry is odd; the same
-thing at 3am is fraud. No single threshold rule produces that conclusion.
+The jump between 14:05 and 03:11 is the argument. The model learned that fraud
+needs several signals together — an odd location on a manual entry is unusual;
+the same thing at 3am is fraud. No single threshold produces that.
 
-### The contrast — why amount is the wrong signal
+Because they are toggles rather than a fixed sequence, a judge can **remove** the
+3am and watch the score collapse with everything else still switched on. That
+demonstrates dependency, which narration cannot.
 
-| Scenario | Amount | Hour | Foreign | Mismatch | Trust | Velocity | Score |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Everyday grocery | ₹45 | 13 | 0 | 0 | 88 | 1 | **8** Low |
-| Large amount only | ₹2,400 | 14 | 0 | 0 | 85 | 1 | **12** Low |
-| Card testing | ₹12 | 4 | 1 | 1 | 18 | 9 | **90** Critical |
-| Every signal fires | ₹820 | 3 | 1 | 1 | 22 | 6 | **90** Critical |
-| Business travel | ₹650 | 11 | 1 | 1 | 91 | 2 | **15** Low |
+### Story two — "When the customer is real"
 
-**₹2,400 approved, ₹12 blocked.** A threshold rule gets both backwards. Row five
-is the false-positive story: foreign and location mismatch both push the score
-up, but high device trust and a normal hour outweigh them, so a genuine traveller
-is not stopped.
+The more important one. A system catching fraud is table stakes; a system not
+catching a customer is what keeps a bank's revenue.
+
+| Step | Effect |
+| --- | --- |
+| ₹1,20,000 laptop on a card that spends ₹1,000–5,000 | Scores into Alert |
+| + same phone, same home network | −10 |
+| + approved by fingerprint in nine seconds | −45 → **Approve** |
+| + but the card is on the blocklist | **Override → Block** |
+
+### Where the engines disagree
+
+Two buttons, identical transactions apart from card usage today. The rule score
+triples; the model does not move. The model learned velocity separates the
+classes weakly (fraud 3.2/day against legitimate 2.0); the rule fires because a
+bank has policy reasons to look at a card used twelve times in a day.
+
+That divergence is the answer to *"why not just use the model?"*
 
 ### End-to-end, five clicks
 
@@ -667,6 +743,11 @@ routing a random sample of *approved* transactions into the review queue.
 
 **Auto-block at 81+ has real customer cost.** A manual override path is required
 before production.
+
+**The verification layer is simulated.** Biometric push, device fingerprinting
+and blocklist lookup are modelled as inputs with fixed weights, not integrated
+with a real 3-D Secure or device-intelligence provider. The architecture and the
+override semantics are the contribution; the integrations are not built.
 
 **Rule weights are hand-set, not optimised.** That is what a rule engine is —
 banks set weights by policy, not by gradient descent. The model is the learned

@@ -7,7 +7,14 @@ let io = null;
 export function initSocket(server) {
   io = new Server(server, {
     path: '/socket.io',
-    cors: { origin: env.CLIENT_ORIGIN, credentials: true },
+    cors: {
+      origin: env.CLIENT_ORIGIN.split(',').map((o) => o.trim()).concat(
+        env.NODE_ENV === 'production'
+          ? []
+          : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175']
+      ),
+      credentials: true,
+    },
   });
 
   io.use((socket, next) => {
