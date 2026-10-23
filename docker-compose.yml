@@ -1,0 +1,71 @@
+# FraudGuard — one command to run the whole stack on any machine with Docker.
+#   docker compose up --build
+# Console: http://localhost:5173   API: http://localhost:5000/api/health   ML: http://localhost:8000/docs
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  ml-service:
+    build: ./ml-service
+    restart: unless-stopped
+    environment:
+      CSV_MODEL_VERSION: csv_v1
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 60s   # model load + SHAP warm-up
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      ml-service:
+        condition: service_healthy
+    environment:
+      PORT: 5000
+      NODE_ENV: production
+      # Defaults to the bundled Mongo container; set MONGO_URI in .env to use Atlas instead
+      MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017/fraudguard}
+      JWT_SECRET: ${JWT_SECRET:-fraudguard_demo_secret_change_me}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:5173}
+      ML_ENABLED: "true"
+      ML_SERVICE_URL: http://ml-service:8000
+      ML_TIMEOUT_MS: 4000
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api}
+        VITE_SOCKET_URL: ${VITE_SOCKET_URL:-}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+volumes:
+  mongo_data:
