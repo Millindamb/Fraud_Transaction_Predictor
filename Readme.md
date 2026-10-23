@@ -785,3 +785,48 @@ A full Ctrl+C and restart is required.
 - Async SHAP, keeping the decision path under 100 ms
 - Manual override on auto-block
 - Model versioning with shadow deployment before promotion
+
+## Rule engine — 33 rules (Round 2)
+
+Round 1 shipped six threshold rules. Round 2 grows the engine to 33, in three families:
+single-transaction thresholds, compound/contextual rules, and behavioural/sequence rules
+(card testing, impossible travel, dormant-card reactivation) drawn from standard card-fraud typologies.
+
+| # | Code | Default | Weight | Family | What it catches |
+|---|---|---|---|---|---|
+| 1 | AMOUNT_ANOMALY | ₹50,000 | 25 | Threshold | High-value transaction |
+| 2 | TIME_ANOMALY | 07:00 | 20 | Threshold | Outside normal activity window |
+| 3 | LOCATION_ANOMALY | 300 km | 30 | Threshold | Far from last known point |
+| 4 | PATTERN_ANOMALY | 1 | 15 | Threshold | First purchase in a category |
+| 5 | VELOCITY | 8 / 24h | 20 | Threshold | Too many authorisations |
+| 6 | DEVICE_ANOMALY | 1 | 15 | Threshold | Manually keyed card |
+| 7 | FOREIGN_TRANSACTION | 1 | 20 | Contextual | Spend originating outside India |
+| 8 | IMPOSSIBLE_TRAVEL | 900 km/h | 35 | Behavioural | Distance/time between swipes is physically impossible |
+| 9 | AMOUNT_VS_HISTORY | 5× median | 20 | Contextual | Amount far above the cardholder's own norm |
+| 10 | HIGH_RISK_CATEGORY | ₹20,000 | 15 | Compound | Jewellery / electronics / travel at value |
+| 11 | MANUAL_HIGH_VALUE | ₹10,000 | 20 | Compound | Keyed-in card + large amount |
+| 12 | NIGHT_HIGH_VALUE | ₹25,000 | 20 | Compound | Large amount 00:00–05:59 |
+| 13 | THRESHOLD_PROBING | ₹50,000 | 15 | Behavioural | Amount at 90–99% of the review limit |
+| 14 | CUMULATIVE_SPEND_24H | ₹1,00,000 | 20 | Behavioural | Many purchases adding up within 24h |
+| 15 | CARD_TESTING | 3 in 1h | 25 | Behavioural | Run of micro-payments (≤ ₹100) validating a card |
+| 16 | TEST_THEN_DRAIN | ₹20,000 | 30 | Behavioural | Large charge after micro-payment probes |
+| 17 | DORMANT_CARD_REACTIVATION | 30 days | 15 | Behavioural | Idle card suddenly spends heavily |
+| 18 | MULTI_CITY_24H | 3 cities | 25 | Behavioural | Several cities within a day |
+| 19 | CATEGORY_HOPPING | 4 categories | 10 | Behavioural | Sampling many merchant types quickly |
+| 20 | DUPLICATE_AMOUNT | 2 repeats | 15 | Behavioural | Same exact amount charged repeatedly |
+| 21 | FOREIGN_MANUAL | 1 | 25 | Compound | Cross-border + keyed-in card details |
+| 22 | SWIPE_FALLBACK_HIGH_VALUE | ₹25,000 | 15 | Compound | Magstripe swipe instead of chip at value |
+| 23 | AMOUNT_ZSCORE | 3σ | 15 | Statistical | Outlier against the card's own spread |
+| 24 | NEW_CARD_HIGH_VALUE | ₹20,000 | 15 | Compound | Large spend on a card with almost no history |
+| 25 | ROUND_AMOUNT | ₹10,000 | 10 | Statistical | Exact round-thousand amounts |
+| 26 | CHIP_FALLBACK_SEQUENCE | 2× median | 20 | Behavioural | Swipe at a higher amount after recent chip use |
+| 27 | CONTACTLESS_NEAR_LIMIT_BURST | 3 in 1h | 25 | Behavioural | Taps of ₹3,000–5,000 probing the PIN-free limit |
+| 28 | HIGH_RISK_MCC_SPIKE | 5× category median | 20 | Contextual | Risky-category spend far above the card's norm for it |
+| 29 | CASH_EQUIVALENT_FIRST_USE | ₹10,000 | 25 | Compound | First crypto/prepaid/money-transfer/gambling use |
+| 30 | NEW_CARD_CONTACTLESS_CLUSTER | 3 taps | 15 | Behavioural | Contactless burst on a newly active card |
+| 31 | LATE_NIGHT_NEW_CATEGORY_CONTACTLESS | ₹2,500 | 15 | Compound | Night-time tap in a category new to the card |
+| 32 | MANUAL_AFTER_CHIP_HISTORY | ₹1,000 | 20 | Behavioural | Keyed-in payment on a card with chip history |
+| 33 | HIGH_RISK_MCC_CONCENTRATION | 3 txns / ₹15,000 | 20 | Behavioural | Repeated purchases in one risky category in a day |
+
+Severity scaling and the 60-point single-rule cap apply across all rules; every threshold
+and weight is editable live from the `/rules` page.

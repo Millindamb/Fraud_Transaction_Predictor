@@ -8,51 +8,9 @@ import Alert from '../models/Alert.js';
 import { scoreTransaction } from '../services/riskEngine.js';
 import { cityCoords } from '../services/featureBuilder.js';
 import { invalidateRuleCache } from '../services/ruleEngine.js';
+import { RULES } from './rulesData.js';
 
-const RULES = [
-  {
-    code: 'AMOUNT_ANOMALY',
-    name: 'High-value transaction',
-    description: 'Amount above the cardholder threshold',
-    threshold: 50000,
-    weight: 25,
-  },
-  {
-    code: 'TIME_ANOMALY',
-    name: 'Unusual transaction hour',
-    description: 'Authorisation outside the normal activity window',
-    threshold: 7,
-    weight: 20,
-  },
-  {
-    code: 'LOCATION_ANOMALY',
-    name: 'Location mismatch',
-    description: 'Distance from the last known authorisation point',
-    threshold: 300,
-    weight: 30,
-  },
-  {
-    code: 'PATTERN_ANOMALY',
-    name: 'Unusual purchase category',
-    description: 'Merchant category never used on this card',
-    threshold: 1,
-    weight: 15,
-  },
-  {
-    code: 'VELOCITY',
-    name: 'Transaction velocity',
-    description: 'Authorisation count in a rolling 24-hour window',
-    threshold: 8,
-    weight: 20,
-  },
-  {
-    code: 'DEVICE_ANOMALY',
-    name: 'Unrecognised terminal',
-    description: 'Card details keyed in manually',
-    threshold: 1,
-    weight: 15,
-  },
-];
+
 
 const CITIES = ['Pune', 'Mumbai', 'Delhi', 'Bengaluru', 'Chennai', 'Hyderabad', 'Jaipur', 'Kolkata'];
 const CATEGORIES = ['GROCERY', 'FUEL', 'RESTAURANT', 'ELECTRONICS', 'TRAVEL', 'JEWELLERY'];

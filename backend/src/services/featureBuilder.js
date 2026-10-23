@@ -103,6 +103,47 @@ export async function buildFeatures(raw) {
   const derivedVelocity = history.filter((t) => new Date(t.timestamp) >= since24h).length;
   const txCount24h = raw.velocityLast24h != null ? Number(raw.velocityLast24h) : derivedVelocity;
 
+  // Short-window behaviour, bounded to the past so out-of-order seed data cannot leak in
+  const SMALL_INR = 100;
+  const since1h = new Date(when.getTime() - 60 * 60 * 1000);
+  const inWindow = (t, from) => new Date(t.timestamp) >= from && new Date(t.timestamp) <= when;
+  const last24 = history.filter((t) => inWindow(t, since24h));
+  const smallTx1h = history.filter((t) => inWindow(t, since1h) && t.amount <= SMALL_INR).length;
+  const smallTx24h = last24.filter((t) => t.amount <= SMALL_INR).length;
+  const distinctCities24h = new Set(
+    [...last24.map((t) => norm(t.location?.city)), norm(txCity)].filter(Boolean)
+  ).size;
+  const distinctCategories24h = new Set(
+    [...last24.map((t) => t.merchant?.category), category].filter(Boolean)
+  ).size;
+  const duplicateAmount24h = last24.filter((t) => t.amount === Number(raw.amount)).length;
+
+  // Entry-mode and per-category behaviour (feeds the Round 2 sequence rules)
+  const modeOf = (t) => String(t.device?.entryMode || '').toUpperCase();
+  const catOf = (t) => String(t.merchant?.category || '').toUpperCase();
+  const curCat = String(category || '').toUpperCase();
+  const since7d = new Date(when.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const chipWithin7d = history.some((t) => modeOf(t) === 'CHIP' && inWindow(t, since7d));
+  const chipCount90d = history.filter((t) => modeOf(t) === 'CHIP').length;
+  const nearLimitContactless1h = history.filter(
+    (t) => modeOf(t) === 'CONTACTLESS' && inWindow(t, since1h) && t.amount >= 3000 && t.amount <= 5000
+  ).length;
+  const contactless24h = last24.filter((t) => modeOf(t) === 'CONTACTLESS').length;
+  const sameCatAmounts = history
+    .filter((t) => curCat && catOf(t) === curCat)
+    .map((t) => t.amount)
+    .sort((a, b) => a - b);
+  const categoryMedian = sameCatAmounts.length ? sameCatAmounts[Math.floor(sameCatAmounts.length / 2)] : 0;
+  const sameCat24h = last24.filter((t) => curCat && catOf(t) === curCat);
+  const sameCat24hCount = sameCat24h.length;
+  const sameCat24hSpend = sameCat24h.reduce((sum, t) => sum + t.amount, 0) + (Number(raw.amount) || 0);
+
+  // Rolling 24h spend including this authorisation (feeds CUMULATIVE_SPEND_24H)
+  const spend24h =
+    history
+      .filter((t) => new Date(t.timestamp) >= since24h && new Date(t.timestamp) <= when)
+      .reduce((sum, t) => sum + t.amount, 0) + (Number(raw.amount) || 0);
+
   return {
     amount: Number(raw.amount) || 0,
     hour,
@@ -118,6 +159,20 @@ export async function buildFeatures(raw) {
     hoursSinceLast,
     impliedKmph: hoursSinceLast ? distanceKm / Math.max(hoursSinceLast, 0.05) : null,
     txCount24h,
+    spend24h,
+    smallTx1h,
+    smallTx24h,
+    distinctCities24h,
+    distinctCategories24h,
+    duplicateAmount24h,
+    chipWithin7d,
+    chipCount90d,
+    nearLimitContactless1h,
+    contactless24h,
+    categoryMedian,
+    categoryHistoryCount: sameCatAmounts.length,
+    sameCat24hCount,
+    sameCat24hSpend,
     knownCategory: categories.size === 0 ? true : categories.has(category),
     categoryCount: categories.size,
     cardTenureDays: history.length

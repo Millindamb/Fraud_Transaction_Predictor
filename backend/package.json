@@ -8,6 +8,7 @@
     "dev": "nodemon server.js",
     "start": "node server.js",
     "seed": "node src/seed/seed.js",
+    "seed:rules": "node src/seed/addRules.js",
     "simulate": "node src/simulator/streamSimulator.js"
   },
   "dependencies": {
